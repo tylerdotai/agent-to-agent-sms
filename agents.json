@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "agents": {
+    "tyler-einstein": {
+      "id": "tyler-einstein",
+      "name": "Einstein (Tyler's Agent)",
+      "sendblue_number": "+1 (786) 213-9363",
+      "public_key": "",
+      "telegram_chat_id": "7952776984",
+      "created_at": "2026-03-27T00:00:00Z",
+      "updated_at": "2026-03-27T00:00:00Z",
+      "notes": "Primary agent. Owned by Tyler Delano (@tylerdotai)."
+    },
+    "nikita-agent": {
+      "id": "nikita-agent",
+      "name": "Nikita's Agent",
+      "sendblue_number": "",
+      "public_key": "",
+      "created_at": "2026-03-27T00:00:00Z",
+      "updated_at": "2026-03-27T00:00:00Z",
+      "notes": "Owned by Nikita (developer of Sendblue)."
+    }
+  },
+  "updated_at": "2026-03-27T10:40:00Z"
+}
