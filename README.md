@@ -2,25 +2,15 @@
 
 > Two AI agents, talking to each other through real SMS — like telekinesis, but with phone bills.
 
-This repo documents the architecture and implementation for enabling two AI agents running on separate OpenClaw instances to communicate directly via SMS, without sharing infrastructure, API keys, or backend services.
-
-**The setup:** Each agent has its own phone number (via Sendblue). Agents can text each other directly by routing messages through their respective Sendblue accounts — no shared message broker, no middleman API to trust.
+This repo documents an architecture for enabling two AI agents running on separate infrastructure to communicate directly via SMS, using Sendblue as the phone provider and a backend verification API to establish trusted contact without a human in the loop.
 
 ---
 
 ## Why This Matters
 
-Most agent-to-agent communication today looks like this:
-- Shared API endpoints
-- Webhook relays
-- Internal message queues
-- Direct API calls between services you control
+Most agent-to-agent communication requires shared infrastructure — a shared API, a message broker, a webhook both agents can reach. SMS breaks that dependency. If two agents have phone numbers, they can coordinate regardless of where they're hosted or what framework they run on.
 
-All of these require **shared infrastructure** — both agents need access to the same system.
-
-SMS-based agent communication breaks that dependency. If two agents have phone numbers, they can coordinate **regardless of where they're hosted**, what framework they run on, or whether they share any backend at all.
-
-This is closer to how humans communicate: you don't need to be on the same platform as someone to text them. Now agents don't either.
+This is like human communication: you don't need to be on the same platform to text someone. Now agents don't either.
 
 ---
 
@@ -28,151 +18,75 @@ This is closer to how humans communicate: you don't need to be on the same platf
 
 ```
 ┌─────────────────┐         SMS          ┌─────────────────┐
-│   Agent A        │◄────────────────────►│   Agent B        │
-│  (OpenClaw)      │                      │  (OpenClaw)      │
-│                  │                      │                   │
+│   Agent A        │◄──────────────────►│   Agent B        │
+│                   │                      │                   │
 │  ┌─────────────┐│                      │  ┌─────────────┐│
 │  │ Sendblue CLI ││                      │  │ Sendblue CLI ││
-│  └──────┬───────┘│                      │  └──────┬───────┘│
+│  └──────┬──────┘│                      │  └──────┬──────┘│
 └─────────┼───────┘                        └─────────┼───────┘
-          │                                          │
-          ▼                                          ▼
-   ┌─────────────┐                           ┌─────────────┐
-   │ Sendblue    │                           │ Sendblue    │
-   │ Account A   │                           │ Account B   │
-   │ (Phone #1)  │                           │ (Phone #2)  │
-   └─────────────┘                           └─────────────┘
+          │                                        │
+          ▼                                        ▼
+   ┌─────────────┐                          ┌─────────────┐
+   │  Sendblue   │                          │  Sendblue   │
+   │ Account A   │                          │ Account B   │
+   │ (Phone #1)  │                          │ (Phone #2)  │
+   └─────────────┘                          └─────────────┘
 ```
 
-Each agent lives on its own OpenClaw instance, has its own Sendblue account, and its own phone number. They text each other the same way two humans would — just with agents instead of people.
+Each agent has its own Sendblue account and phone number. They text each other the same way two humans would.
+
+---
+
+## The Verification Problem
+
+Sendblue requires bidirectional contact verification before agents can exchange SMS. The standard flow requires one agent to text first — but for two agents, neither can text without already being verified. Circular dependency.
+
+**The solution:** A backend verification API that validates agent identity through a shared secret, with no SMS round-trip required.
+
+See [VERIFICATION_API.md](./VERIFICATION_API.md) for the full specification.
 
 ---
 
 ## Components
 
-### OpenClaw
-The agent runtime. Handles:
-- Message processing and reasoning
-- Tool execution (including Sendblue CLI)
-- Session management and memory
-- Outbound channel routing (Telegram, Discord, SMS relay, etc.)
+| Component | Role |
+|-----------|------|
+| **Sendblue** | Phone number provider, SMS gateway, contact verification |
+| **Sendblue CLI / API** | How agents send outbound SMS |
+| **Inbound Relay** | Delivers inbound SMS to the agent (see below) |
+| **Verification API** | Breaks the circular verification dependency |
 
-[OpenClaw](https://github.com/openclaw/openclaw) is the agent framework that makes this possible. It provides the tooling, channel abstraction, and tool execution environment.
+### Inbound SMS Relay
 
-### Sendblue
-SMS/iMessage gateway that gives agents phone numbers. Each agent gets its own number. No shared infrastructure required — just two Sendblue accounts talking to each other over standard SMS.
+Sendblue doesn't push directly to agent infrastructure. An inbound relay forwards incoming SMS to wherever the agent is running. Common options:
 
-- Agent A texts Agent B's number
-- Sendblue routes it to Agent B's OpenClaw instance
-- Agent B receives it, processes it, responds
+- **Telegram bot** — Sendblue calls a Telegram bot API; the agent polls Telegram
+- **Cloudflare Tunnel** — Direct webhook to the agent's host with a public HTTPS URL
+- **ngrok** — Temporary public URL to your local agent
 
----
-
-## How It Works (Step by Step)
-
-### Initial Contact Setup
-
-1. **Agent A** adds **Agent B's phone number** as a contact in Sendblue
-2. **Agent B** adds **Agent A's phone number** as a contact in Sendblue
-3. Each agent sends an initial "hello" text to the other's number
-4. Sendblue verifies both contacts — now both agents can send to each other
-
-### Message Flow
-
-```
-Agent A wants to coordinate with Agent B:
-
-1. Agent A composes a message (reasoning, tool use, etc.)
-2. Agent A calls: sendblue send <AgentB_number> <message>
-3. Sendblue delivers the SMS to Agent B's phone number
-4. Agent B's OpenClaw receives the inbound SMS (via Telegram bot relay or direct webhook)
-5. Agent B processes the message, decides how to respond
-6. Agent B calls: sendblue send <AgentA_number> <response>
-7. Agent A receives the reply
-
-Round complete. Both agents just had a conversation without sharing any infrastructure.
-```
-
-### Contact Verification
-
-Sendblue requires mutual verification before two numbers can exchange messages:
-- Agent A adds Agent B's number → status: "pending"
-- Agent B texts Agent A's number → verification completes
-- Now Agent A can send to Agent B
-
-This is a security feature — prevents spam and unauthorized inbound messages.
+The relay is an infrastructure detail. Any publicly reachable endpoint that can receive a webhook from Sendblue works.
 
 ---
 
-## Security Considerations
+## How It Works
 
-### What This Solves
+### 1. Each agent provisions a Sendblue number
 
-- **Infrastructure independence** — agents don't need to share APIs, webhooks, or backend services
-- **No credential sharing** — each agent controls its own Sendblue account
-- **Human-verified contact handshake** — both agents must intentionally add each other
+Each operator creates a Sendblue account, gets a phone number, and installs the Sendblue CLI.
 
-### What to Be Aware Of
+### 2. Agents exchange numbers (out-of-band)
 
-**Prompt Injection (the real threat)**
+Agents share their phone numbers via any trusted channel — email, Signal, a shared dashboard, etc.
 
-If Agent A receives a message from Agent B, and that message was itself generated by an LLM (Agent B's), there's a risk: what if Agent B's output was injected with a malicious prompt?
+### 3. Agents verify via the backend API
 
-Mitigations:
-- Agents should treat inbound SMS as untrusted input, same as any external message
-- Use instruction hierarchy: system prompt > human approval > tool execution
-- Never blindly execute instructions from an inbound SMS without verification
-- Agent B's human should review what Agent B is sending before it goes out (human-in-the-loop)
+Both agents call the verification API with their number and API credentials. Sendblue validates both sides and marks the contact verified. No SMS exchange required.
 
-**Number Spoofing**
+See [VERIFICATION_API.md](./VERIFICATION_API.md) for the full flow.
 
-Sendblue numbers are tied to real accounts. In a production scenario, you'd want to verify that inbound SMS actually came from the expected Sendblue account, not just from a number claiming to be Agent B.
+### 4. Agents communicate freely
 
-Mitigations:
-- Use Sendblue's webhook signatures (if available)
-- Verify message authenticity through a shared secret or challenge-response
-- Keep agent numbers private — don't publish them publicly
-
-**Scope of Access**
-
-When two agents text each other, they're extending their attack surface to each other's infrastructure. Think carefully about:
-- What capabilities does each agent have?
-- What can it instruct the other to do?
-- Can it access shared resources (contacts, files, systems)?
-
----
-
-## Setup Requirements
-
-To build this yourself, you need:
-
-1. **Two OpenClaw instances** (can be on the same machine or different hosts)
-2. **Two Sendblue accounts** with phone numbers
-3. **A relay channel** for inbound SMS (Telegram bot recommended — see below)
-
-### Inbound SMS Handling
-
-Sendblue handles outbound SMS natively via CLI. For **inbound** SMS, you need a way to receive messages and route them into OpenClaw. The tested approach:
-
-**Telegram Bot Relay (Recommended)**
-- Create a Telegram bot for each agent
-- When Sendblue receives an SMS, forward it to the Telegram bot via webhook/API
-- OpenClaw reads the Telegram message, processes it, responds via Telegram
-- Agent replies are sent back through Sendblue
-
-This is the setup documented in the [SETUP.md](./SETUP.md) guide.
-
----
-
-## What This Is Not
-
-This is **not** a product or a plug-and-play solution. It's an architectural pattern and proof-of-concept for:
-
-- Research into agent-to-agent communication protocols
-- Experimentation with distributed AI systems
-- Exploring security boundaries between independent agent instances
-
-If you build something interesting with this, we'd love to hear about it.
+Once verified, agents can send and receive SMS directly.
 
 ---
 
@@ -180,22 +94,18 @@ If you build something interesting with this, we'd love to hear about it.
 
 ```
 agent-to-agent-sms/
-├── README.md           # This file — overview and architecture
-├── ARCHITECTURE.md     # Deep dive into components and data flow
-├── SETUP.md            # Step-by-step setup guide
-└── SECURITY.md         # Security model, threat analysis, mitigations
+├── README.md               # This file — overview
+├── ARCHITECTURE.md         # Deep dive into components and data flow
+├── SETUP.md                # Step-by-step setup guide
+├── SECURITY.md             # Security model and threat analysis
+├── VERIFICATION.md         # High-level verification protocol
+├── VERIFICATION_API.md     # Backend API specification
+└── DATA_STRUCTURES.md      # Request/response schemas
 ```
 
 ---
 
-## Related Reading
+## Related
 
+- [Sendblue API Documentation](https://docs.sendblue.com)
 - [OpenClaw Documentation](https://docs.openclaw.ai)
-- [Sendblue CLI Reference](https://sendblue.co)
-- [OpenClaw GitHub](https://github.com/openclaw/openclaw)
-
----
-
-## License
-
-MIT — do whatever you want with this. If you build something cool, link back here.
